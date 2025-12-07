@@ -22,6 +22,7 @@ enforcementLevel = "Standard"
 apiTier = "Free"  # "Free" or "Tier 1"
 moderationMode = "Hybrid"  # "Hybrid", "Edit Only", "Delete Only"
 customReplacement = "I follow Discord ToS"
+customPromptInstruction = "" # Custom instruction for Gemini replacements
 
 # API State
 apiKeys = []
@@ -42,6 +43,7 @@ def save_config():
         "apiTier": apiTier,
         "moderationMode": moderationMode,
         "customReplacement": customReplacement,
+        "customPromptInstruction": customPromptInstruction,
         "currentKeyIndex": currentKeyIndex
     }
     try:
@@ -51,7 +53,7 @@ def save_config():
         log.error(f"Failed to save config: {e}")
 
 def load_config():
-    global isModerationActive, enforcementLevel, apiTier, moderationMode, customReplacement, currentKeyIndex
+    global isModerationActive, enforcementLevel, apiTier, moderationMode, customReplacement, customPromptInstruction, currentKeyIndex
     if not os.path.exists(CONFIG_FILE):
         return
 
@@ -64,6 +66,7 @@ def load_config():
         apiTier = config.get("apiTier", "Free")
         moderationMode = config.get("moderationMode", "Hybrid")
         customReplacement = config.get("customReplacement", "I follow Discord ToS")
+        customPromptInstruction = config.get("customPromptInstruction", "")
         currentKeyIndex = config.get("currentKeyIndex", 0)
         
         log.info("Config loaded successfully")
@@ -142,6 +145,7 @@ Response format (JSON only):
 {
     "violates_tos": true/false,
     "severity": "partial" or "full",
+    "rewritten_message": "safe version of the full message (optional)",
     "violations": [
         {
             "phrase": "exact phrase that violates",
@@ -158,9 +162,8 @@ IMPORTANT GUIDELINES:
 3. CSAM DISTINCTION: Do NOT flag general adult content, fetishes (e.g., scat, gore, roleplay), or NSFW humor as CSAM unless it EXPLICITLY depicts or describes minors. "Scat" or "poop" jokes are NOT CSAM.
 4. If the message contains ANY safe content that can be preserved, set severity to "partial" and action to "edit".
 5. Only set severity to "full" and action to "delete" if the ENTIRE message is a violation.
-6. For "partial" violations, the "replacement" MUST be exactly: "I follow discord tos".
-7. Ensure the "phrase" field matches the text in the message EXACTLY.
-8. CONSISTENCY CHECK: If "violates_tos" is false, "violations" MUST be empty and "action" MUST be null. Do not provide replacements for non-violations.
+6. Ensure the "phrase" field matches the text in the message EXACTLY.
+7. CONSISTENCY CHECK: If "violates_tos" is false, "violations" MUST be empty and "action" MUST be null. Do not provide replacements for non-violations.
 """
 
 def getEnforcementInstructions(level):
@@ -210,7 +213,16 @@ async def checkMessageWithGemini(messageContent):
 
     try:
         levelInstructions = getEnforcementInstructions(enforcementLevel)
-        prompt = f"{BASE_TOS_CONTEXT}\n{levelInstructions}\n\nMessage to analyze:\n\"{messageContent}\"\n\nProvide your analysis in JSON format."
+        
+        # Construct the replacement rule dynamically
+        if customPromptInstruction:
+            replacementRule = f"REPLACEMENT RULE: You MUST provide a 'rewritten_message' that rewrites the ENTIRE message to be safe, based on this instruction: {customPromptInstruction}"
+        elif moderationMode == "Edit Only":
+            replacementRule = "REPLACEMENT RULE: You MUST provide a 'rewritten_message' that rewrites the ENTIRE message to be safe. It MUST be exactly: \"I follow discord tos\"."
+        else:
+            replacementRule = "REPLACEMENT RULE: For 'partial' violations, the 'replacement' MUST be exactly: \"I follow discord tos\"."
+            
+        prompt = f"{BASE_TOS_CONTEXT}\n{replacementRule}\n{levelInstructions}\n\nMessage to analyze:\n\"{messageContent}\"\n\nProvide your analysis in JSON format."
         
         # Retry logic for multiple keys
         max_retries = len(apiKeys)
@@ -252,6 +264,7 @@ async def moderateMessage(message, analysis):
         
         action = analysis.get('action', 'edit')
         violations = analysis.get('violations', [])
+        rewritten = analysis.get('rewritten_message')
         
         # Apply Moderation Mode Logic
         if moderationMode == "Delete Only":
@@ -264,29 +277,38 @@ async def moderateMessage(message, analysis):
             log.warning(f"Deleting message: {message.content}")
             await message.delete()
             
-        elif action == 'edit' and violations:
-            editedContent = message.content
-            
-            # optimization: sort by length so we dont replace substrings incorrectly
-            violations.sort(key=lambda v: len(v.get('phrase', '')), reverse=True)
-            
-            for violation in violations:
-                phrase = violation.get('phrase', '')
-                replacement = violation.get('replacement')
+        elif action == 'edit':
+            # Priority 1: Full rewrite from model (Best for custom prompts/Edit Only)
+            if rewritten:
+                if rewritten != message.content:
+                    log.warning(f"Rewriting to: {rewritten}")
+                    await message.edit(content=rewritten)
+                return
+
+            # Priority 2: Violation replacements (Best for partial/standard mode)
+            if violations:
+                editedContent = message.content
                 
-                # Use custom replacement if configured
-                final_replacement = customReplacement
+                # optimization: sort by length so we dont replace substrings incorrectly
+                violations.sort(key=lambda v: len(v.get('phrase', '')), reverse=True)
                 
-                # If the model provided a specific replacement (rarely used now due to prompt), use it?
-                # User said: "let me specify what to edit stuff to instead of 'I follow Discord ToS'"
-                # So we should prefer the customReplacement global variable.
+                for violation in violations:
+                    phrase = violation.get('phrase', '')
+                    replacement = violation.get('replacement')
+                    
+                    # Determine final replacement
+                    final_replacement = customReplacement # Default to static setting
+                    
+                    # If user has a custom prompt instruction, trust the model's output
+                    if customPromptInstruction and replacement:
+                        final_replacement = replacement
+                    
+                    if phrase:
+                        editedContent = re.sub(re.escape(phrase), final_replacement, editedContent, flags=re.IGNORECASE)
                 
-                if phrase:
-                    editedContent = re.sub(re.escape(phrase), final_replacement, editedContent, flags=re.IGNORECASE)
-            
-            if editedContent != message.content:
-                log.warning(f"Editing to: {editedContent}")
-                await message.edit(content=editedContent)
+                if editedContent != message.content:
+                    log.warning(f"Editing to: {editedContent}")
+                    await message.edit(content=editedContent)
             
     except discord.errors.NotFound:
         log.error("Message gone before we could edit it")
@@ -355,25 +377,14 @@ def createTrayIcon():
         global customReplacement
         
         # Use PowerShell for a robust input dialog on Windows
-        # Tkinter causes event loop conflicts with pystray
         try:
-            # Escape single quotes for PowerShell string
             safe_current = customReplacement.replace("'", "''")
-            
             ps_script = f"""
             Add-Type -AssemblyName Microsoft.VisualBasic
-            [Microsoft.VisualBasic.Interaction]::InputBox('Enter new replacement text:', 'Set Replacement Text', '{safe_current}')
+            $res = [Microsoft.VisualBasic.Interaction]::InputBox('Enter new replacement text:', 'Set Replacement Text', '{safe_current}')
+            Write-Output $res
             """
-            
-            # Run PowerShell command to show InputBox
-            # CREATE_NO_WINDOW = 0x08000000 to hide the console window
-            process = subprocess.Popen(
-                ["powershell", "-Command", ps_script],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                creationflags=0x08000000
-            )
+            process = subprocess.Popen(["powershell", "-Command", ps_script], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, creationflags=0x08000000)
             result, _ = process.communicate()
             new_text = result.strip()
             
@@ -382,6 +393,35 @@ def createTrayIcon():
                 save_config()
                 icon.notify(f"Replacement set to: {customReplacement}", "Discord Bot")
                 log.info(f"Custom replacement set to: {customReplacement}")
+                
+        except Exception as e:
+            log.error(f"Failed to open dialog: {e}")
+            icon.notify("Error opening input dialog", "Discord Bot")
+
+    def onSetCustomPrompt(icon, item):
+        global customPromptInstruction
+        
+        try:
+            safe_current = customPromptInstruction.replace("'", "''")
+            ps_script = f"""
+            Add-Type -AssemblyName Microsoft.VisualBasic
+            $res = [Microsoft.VisualBasic.Interaction]::InputBox('Enter custom prompt instruction (Leave empty for default):', 'Set Custom Prompt', '{safe_current}')
+            Write-Output $res
+            """
+            process = subprocess.Popen(["powershell", "-Command", ps_script], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, creationflags=0x08000000)
+            result, _ = process.communicate()
+            new_text = result.strip()
+            
+            # Allow clearing it
+            customPromptInstruction = new_text
+            save_config()
+            
+            if customPromptInstruction:
+                icon.notify(f"Custom Prompt Active", "Discord Bot")
+                log.info(f"Custom prompt set to: {customPromptInstruction}")
+            else:
+                icon.notify(f"Custom Prompt Disabled", "Discord Bot")
+                log.info(f"Custom prompt disabled")
                 
         except Exception as e:
             log.error(f"Failed to open dialog: {e}")
@@ -418,6 +458,7 @@ def createTrayIcon():
             pystray.MenuItem("Delete Only", onModeSelect, checked=lambda item: moderationMode == "Delete Only")
         )),
         pystray.MenuItem("Set Replacement Text", onSetReplacement),
+        pystray.MenuItem("Set Custom Prompt", onSetCustomPrompt),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Exit", onExit)
     )

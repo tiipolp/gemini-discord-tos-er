@@ -1,0 +1,9 @@
+{
+    "isModerationActive": true,
+    "enforcementLevel": "Standard",
+    "apiTier": "Tier 1",
+    "moderationMode": "Edit Only",
+    "customReplacement": "I follow Discord ToS",
+    "customPromptInstruction": "make it really christmassy and jolly and shit, like make the sentence they said make sense, but make it christmas",
+    "currentKeyIndex": 0
+}
