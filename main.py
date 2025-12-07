@@ -8,16 +8,30 @@ import traceback
 import threading
 import asyncio
 import pystray
+import time
+import subprocess
 from PIL import Image, ImageDraw
 from datetime import datetime
 from dotenv import load_dotenv
 
 load_dotenv()
 
+# Configuration State
 isModerationActive = True
 enforcementLevel = "Standard"
+apiTier = "Free"  # "Free" or "Tier 1"
+moderationMode = "Hybrid"  # "Hybrid", "Edit Only", "Delete Only"
+customReplacement = "I follow Discord ToS"
+
+# API State
+apiKeys = []
+currentKeyIndex = 0
+lastRequestTime = 0
+
+# Runtime State
 botThread = None
 trayIcon = None
+processingTask = None
 
 jsonRegex = re.compile(r'```(?:json)?\s*(\{.*?\})\s*```', re.DOTALL)
 
@@ -29,8 +43,29 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# API setup
-genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
+# Load API Keys
+env_keys = os.getenv('GEMINI_API_KEYS')
+if env_keys:
+    apiKeys = [k.strip() for k in env_keys.split(',') if k.strip()]
+else:
+    single_key = os.getenv('GEMINI_API_KEY')
+    if single_key:
+        apiKeys = [single_key]
+
+if not apiKeys:
+    log.error("No API keys found! Set GEMINI_API_KEYS (comma separated) or GEMINI_API_KEY in .env")
+
+def configure_genai():
+    global currentKeyIndex
+    if not apiKeys:
+        return
+    try:
+        genai.configure(api_key=apiKeys[currentKeyIndex])
+        log.info(f"Switched to API Key index: {currentKeyIndex}")
+    except Exception as e:
+        log.error(f"Failed to configure API key: {e}")
+
+configure_genai()
 model = genai.GenerativeModel('gemini-2.5-flash-lite')
 
 client = discord.Client()
@@ -74,10 +109,14 @@ Response format (JSON only):
 
 IMPORTANT GUIDELINES:
 1. IGNORE ALL URLs, LINKS, and GIFs. Do not flag a message just because it contains a link, even if the link looks suspicious. Assume all links are safe.
-2. If the message contains ANY safe content that can be preserved, set severity to "partial" and action to "edit".
-3. Only set severity to "full" and action to "delete" if the ENTIRE message is a violation.
-4. For "partial" violations, the "replacement" MUST be exactly: "I follow discord tos".
-5. Ensure the "phrase" field matches the text in the message EXACTLY."""
+2. CONTEXTUAL ACCURACY: Interpret the ToS as Discord intends. The prohibition on "Harm" and "Violence" applies to REAL-WORLD threats and targeted harassment. It does NOT apply to standard video game terminology (e.g., "killing", "shooting") unless it is used to threaten or harass a specific user.
+3. CSAM DISTINCTION: Do NOT flag general adult content, fetishes (e.g., scat, gore, roleplay), or NSFW humor as CSAM unless it EXPLICITLY depicts or describes minors. "Scat" or "poop" jokes are NOT CSAM.
+4. If the message contains ANY safe content that can be preserved, set severity to "partial" and action to "edit".
+5. Only set severity to "full" and action to "delete" if the ENTIRE message is a violation.
+6. For "partial" violations, the "replacement" MUST be exactly: "I follow discord tos".
+7. Ensure the "phrase" field matches the text in the message EXACTLY.
+8. CONSISTENCY CHECK: If "violates_tos" is false, "violations" MUST be empty and "action" MUST be null. Do not provide replacements for non-violations.
+"""
 
 def getEnforcementInstructions(level):
     if level == "Strict":
@@ -105,13 +144,46 @@ ENFORCEMENT LEVEL: LENIENT (Minimum ToS Compliance)
     return ""
 
 async def checkMessageWithGemini(messageContent):
+    global currentKeyIndex, lastRequestTime
+    
+    # Rate Limiting Logic
+    now = time.time()
+    if apiTier == "Free":
+        # 20 RPM = 1 request every 3 seconds
+        timeSinceLast = now - lastRequestTime
+        if timeSinceLast < 3.0:
+            wait_time = 3.0 - timeSinceLast
+            log.info(f"Rate limit (Free): Waiting {wait_time:.2f}s")
+            await asyncio.sleep(wait_time)
+    else:
+        # Tier 1: 4000 RPM = ~0.015s per request (negligible, but let's be safe)
+        timeSinceLast = now - lastRequestTime
+        if timeSinceLast < 0.02:
+            await asyncio.sleep(0.02)
+            
+    lastRequestTime = time.time()
+
     try:
         levelInstructions = getEnforcementInstructions(enforcementLevel)
         prompt = f"{BASE_TOS_CONTEXT}\n{levelInstructions}\n\nMessage to analyze:\n\"{messageContent}\"\n\nProvide your analysis in JSON format."
         
-        response = model.generate_content(prompt)
-        responseText = response.text.strip()
-        
+        # Retry logic for multiple keys
+        max_retries = len(apiKeys)
+        for attempt in range(max_retries):
+            try:
+                response = model.generate_content(prompt)
+                responseText = response.text.strip()
+                break # Success
+            except Exception as e:
+                log.error(f"API Error with key index {currentKeyIndex}: {e}")
+                if attempt < max_retries - 1:
+                    currentKeyIndex = (currentKeyIndex + 1) % len(apiKeys)
+                    configure_genai()
+                    log.info("Retrying with next key...")
+                    await asyncio.sleep(1)
+                else:
+                    raise e # All keys failed
+
         jsonMatch = jsonRegex.search(responseText)
         if jsonMatch:
             responseText = jsonMatch.group(1)
@@ -124,7 +196,7 @@ async def checkMessageWithGemini(messageContent):
         log.error(f"JSON parse error: {e} | Text: {responseText}")
         return {"violates_tos": False}
     except Exception as e:
-        log.error(f"Gemini API error: {e}")
+        log.error(f"Gemini API error (All keys failed): {e}")
         return {"violates_tos": False}
 
 async def moderateMessage(message, analysis):
@@ -134,6 +206,13 @@ async def moderateMessage(message, analysis):
         
         action = analysis.get('action', 'edit')
         violations = analysis.get('violations', [])
+        
+        # Apply Moderation Mode Logic
+        if moderationMode == "Delete Only":
+            action = "delete"
+        elif moderationMode == "Edit Only":
+            action = "edit"
+        # "Hybrid" keeps the original action
         
         if action == 'delete':
             log.warning(f"Deleting message: {message.content}")
@@ -149,10 +228,15 @@ async def moderateMessage(message, analysis):
                 phrase = violation.get('phrase', '')
                 replacement = violation.get('replacement')
                 
-                if phrase and replacement:
-                    editedContent = re.sub(re.escape(phrase), replacement, editedContent, flags=re.IGNORECASE)
-                elif phrase:
-                    editedContent = re.sub(re.escape(phrase), "I follow discord tos", editedContent, flags=re.IGNORECASE)
+                # Use custom replacement if configured
+                final_replacement = customReplacement
+                
+                # If the model provided a specific replacement (rarely used now due to prompt), use it?
+                # User said: "let me specify what to edit stuff to instead of 'I follow Discord ToS'"
+                # So we should prefer the customReplacement global variable.
+                
+                if phrase:
+                    editedContent = re.sub(re.escape(phrase), final_replacement, editedContent, flags=re.IGNORECASE)
             
             if editedContent != message.content:
                 log.warning(f"Editing to: {editedContent}")
@@ -188,7 +272,7 @@ async def on_message(message):
         await moderateMessage(message, analysis)
 
 def createTrayIcon():
-    global trayIcon, isModerationActive, enforcementLevel
+    global trayIcon, isModerationActive, enforcementLevel, apiTier, moderationMode, customReplacement
 
     def onClicked(icon, item):
         global isModerationActive
@@ -204,6 +288,53 @@ def createTrayIcon():
         enforcementLevel = str(item)
         icon.notify(f"Level: {enforcementLevel}", "Discord Bot")
         log.info(f"Level set to: {enforcementLevel}")
+
+    def onTierSelect(icon, item):
+        global apiTier
+        apiTier = str(item)
+        icon.notify(f"API Tier: {apiTier}", "Discord Bot")
+        log.info(f"API Tier set to: {apiTier}")
+
+    def onModeSelect(icon, item):
+        global moderationMode
+        moderationMode = str(item)
+        icon.notify(f"Mode: {moderationMode}", "Discord Bot")
+        log.info(f"Moderation Mode set to: {moderationMode}")
+
+    def onSetReplacement(icon, item):
+        global customReplacement
+        
+        # Use PowerShell for a robust input dialog on Windows
+        # Tkinter causes event loop conflicts with pystray
+        try:
+            # Escape single quotes for PowerShell string
+            safe_current = customReplacement.replace("'", "''")
+            
+            ps_script = f"""
+            Add-Type -AssemblyName Microsoft.VisualBasic
+            [Microsoft.VisualBasic.Interaction]::InputBox('Enter new replacement text:', 'Set Replacement Text', '{safe_current}')
+            """
+            
+            # Run PowerShell command to show InputBox
+            # CREATE_NO_WINDOW = 0x08000000 to hide the console window
+            process = subprocess.Popen(
+                ["powershell", "-Command", ps_script],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                creationflags=0x08000000
+            )
+            result, _ = process.communicate()
+            new_text = result.strip()
+            
+            if new_text:
+                customReplacement = new_text
+                icon.notify(f"Replacement set to: {customReplacement}", "Discord Bot")
+                log.info(f"Custom replacement set to: {customReplacement}")
+                
+        except Exception as e:
+            log.error(f"Failed to open dialog: {e}")
+            icon.notify("Error opening input dialog", "Discord Bot")
 
     def onExit(icon, item):
         icon.stop()
@@ -226,6 +357,16 @@ def createTrayIcon():
             pystray.MenuItem("Standard", onLevelSelect, checked=lambda item: enforcementLevel == "Standard"),
             pystray.MenuItem("Lenient", onLevelSelect, checked=lambda item: enforcementLevel == "Lenient")
         )),
+        pystray.MenuItem("API Tier", pystray.Menu(
+            pystray.MenuItem("Free", onTierSelect, checked=lambda item: apiTier == "Free"),
+            pystray.MenuItem("Tier 1", onTierSelect, checked=lambda item: apiTier == "Tier 1")
+        )),
+        pystray.MenuItem("Moderation Mode", pystray.Menu(
+            pystray.MenuItem("Hybrid", onModeSelect, checked=lambda item: moderationMode == "Hybrid"),
+            pystray.MenuItem("Edit Only", onModeSelect, checked=lambda item: moderationMode == "Edit Only"),
+            pystray.MenuItem("Delete Only", onModeSelect, checked=lambda item: moderationMode == "Delete Only")
+        )),
+        pystray.MenuItem("Set Replacement Text", onSetReplacement),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Exit", onExit)
     )
