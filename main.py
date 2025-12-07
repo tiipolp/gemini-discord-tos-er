@@ -33,6 +33,43 @@ botThread = None
 trayIcon = None
 processingTask = None
 
+CONFIG_FILE = 'config.json'
+
+def save_config():
+    config = {
+        "isModerationActive": isModerationActive,
+        "enforcementLevel": enforcementLevel,
+        "apiTier": apiTier,
+        "moderationMode": moderationMode,
+        "customReplacement": customReplacement,
+        "currentKeyIndex": currentKeyIndex
+    }
+    try:
+        with open(CONFIG_FILE, 'w') as f:
+            json.dump(config, f, indent=4)
+    except Exception as e:
+        log.error(f"Failed to save config: {e}")
+
+def load_config():
+    global isModerationActive, enforcementLevel, apiTier, moderationMode, customReplacement, currentKeyIndex
+    if not os.path.exists(CONFIG_FILE):
+        return
+
+    try:
+        with open(CONFIG_FILE, 'r') as f:
+            config = json.load(f)
+            
+        isModerationActive = config.get("isModerationActive", True)
+        enforcementLevel = config.get("enforcementLevel", "Standard")
+        apiTier = config.get("apiTier", "Free")
+        moderationMode = config.get("moderationMode", "Hybrid")
+        customReplacement = config.get("customReplacement", "I follow Discord ToS")
+        currentKeyIndex = config.get("currentKeyIndex", 0)
+        
+        log.info("Config loaded successfully")
+    except Exception as e:
+        log.error(f"Failed to load config: {e}")
+
 jsonRegex = re.compile(r'```(?:json)?\s*(\{.*?\})\s*```', re.DOTALL)
 
 # Setup logging but keep it simple
@@ -54,6 +91,14 @@ else:
 
 if not apiKeys:
     log.error("No API keys found! Set GEMINI_API_KEYS (comma separated) or GEMINI_API_KEY in .env")
+
+# Load config before configuring GenAI so we use the saved key index
+load_config()
+
+# Ensure key index is valid
+if apiKeys and currentKeyIndex >= len(apiKeys):
+    currentKeyIndex = 0
+    save_config()
 
 def configure_genai():
     global currentKeyIndex
@@ -178,6 +223,7 @@ async def checkMessageWithGemini(messageContent):
                 log.error(f"API Error with key index {currentKeyIndex}: {e}")
                 if attempt < max_retries - 1:
                     currentKeyIndex = (currentKeyIndex + 1) % len(apiKeys)
+                    save_config() # Save new key index
                     configure_genai()
                     log.info("Retrying with next key...")
                     await asyncio.sleep(1)
@@ -279,6 +325,7 @@ def createTrayIcon():
         strItem = str(item)
         if strItem == "Enable Moderation":
             isModerationActive = not isModerationActive
+            save_config()
             state = "Enabled" if isModerationActive else "Disabled"
             icon.notify(f"ToS Moderation: {state}", "Discord Bot")
             log.info(f"Toggled moderation: {state}")
@@ -286,18 +333,21 @@ def createTrayIcon():
     def onLevelSelect(icon, item):
         global enforcementLevel
         enforcementLevel = str(item)
+        save_config()
         icon.notify(f"Level: {enforcementLevel}", "Discord Bot")
         log.info(f"Level set to: {enforcementLevel}")
 
     def onTierSelect(icon, item):
         global apiTier
         apiTier = str(item)
+        save_config()
         icon.notify(f"API Tier: {apiTier}", "Discord Bot")
         log.info(f"API Tier set to: {apiTier}")
 
     def onModeSelect(icon, item):
         global moderationMode
         moderationMode = str(item)
+        save_config()
         icon.notify(f"Mode: {moderationMode}", "Discord Bot")
         log.info(f"Moderation Mode set to: {moderationMode}")
 
@@ -329,6 +379,7 @@ def createTrayIcon():
             
             if new_text:
                 customReplacement = new_text
+                save_config()
                 icon.notify(f"Replacement set to: {customReplacement}", "Discord Bot")
                 log.info(f"Custom replacement set to: {customReplacement}")
                 
