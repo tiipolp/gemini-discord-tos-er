@@ -160,10 +160,15 @@ IMPORTANT GUIDELINES:
 1. IGNORE ALL URLs, LINKS, and GIFs. Do not flag a message just because it contains a link, even if the link looks suspicious. Assume all links are safe.
 2. CONTEXTUAL ACCURACY: Interpret the ToS as Discord intends. The prohibition on "Harm" and "Violence" applies to REAL-WORLD threats and targeted harassment. It does NOT apply to standard video game terminology (e.g., "killing", "shooting") unless it is used to threaten or harass a specific user.
 3. CSAM DISTINCTION: Do NOT flag general adult content, fetishes (e.g., scat, gore, roleplay), or NSFW humor as CSAM unless it EXPLICITLY depicts or describes minors. "Scat" or "poop" jokes are NOT CSAM.
-4. If the message contains ANY safe content that can be preserved, set severity to "partial" and action to "edit".
-5. Only set severity to "full" and action to "delete" if the ENTIRE message is a violation.
-6. Ensure the "phrase" field matches the text in the message EXACTLY.
-7. CONSISTENCY CHECK: If "violates_tos" is false, "violations" MUST be empty and "action" MUST be null. Do not provide replacements for non-violations.
+4. SLANG & INSULTS: Common insults like "idiot", "stupid", "dumb", "retard/retarded", or casual slang like "nigga" (without hard-r) are NOT ToS violations unless used in severe, targeted harassment. Discord does NOT ban for casual profanity or insults in normal conversation.
+5. HARD SLURS: Only flag HARD racial slurs (e.g., "n****r" with hard-r, "f****t", "tr***y") or severe dehumanizing language when used maliciously.
+6. HYPERBOLIC SLANG: Do NOT flag hyperbolic expressions of frustration or difficulty (e.g., "this game is raping me", "kill me", "I'm dead") as threats or sexual violence. These are common figures of speech.
+7. TECH & EXPLOITS: Merely naming an exploit, cheat, or software (e.g., "chocosploit", "synapse") or discussing "whitelisting" them is NOT a violation. Only flag if the user is actively distributing malicious links, selling user data, or organizing a DDoS attack.
+8. DISPUTES: Discussing "allegations", "moderation", or "bans" is NOT harassment. Users are allowed to complain or discuss server politics.
+9. If the message contains ANY safe content that can be preserved, set severity to "partial" and action to "edit".
+10. Only set severity to "full" and action to "delete" if the ENTIRE message is a violation.
+11. Ensure the "phrase" field matches the text in the message EXACTLY.
+12. CONSISTENCY CHECK: If "violates_tos" is false, "violations" MUST be empty and "action" MUST be null. Do not provide replacements for non-violations.
 """
 
 def getEnforcementInstructions(level):
@@ -178,8 +183,10 @@ ENFORCEMENT LEVEL: STRICT (Family Friendly & Full Compliance)
         return """
 ENFORCEMENT LEVEL: STANDARD (ToS Baseline)
 - Allow mild profanity (shit, fuck, etc.) in casual conversation.
+- Allow common insults (idiot, stupid, dumb, retarded) unless part of severe targeted harassment.
+- Allow casual slang like "nigga" (without hard-r). ONLY flag hard-r "n****r" and other severe slurs (f****t, tr***y, etc.).
 - Allow suggestive jokes/humor unless it is Explicit Sexual Content (prohibited in non-age-restricted channels).
-- Flag Targeted Harassment or Bullying, but allow friendly banter.
+- Flag Targeted Harassment or Bullying ONLY if severe, sustained, or dehumanizing. Allow friendly banter.
 - Flag Malicious Automation: Explicit mentions of scraping, token loggers, or DDoS tools (ToS Section 9).
 """
     elif level == "Lenient":

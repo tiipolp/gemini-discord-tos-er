@@ -4,6 +4,6 @@
     "apiTier": "Tier 1",
     "moderationMode": "Edit Only",
     "customReplacement": "I follow Discord ToS",
-    "customPromptInstruction": "make it really christmassy and jolly and shit, like make the sentence they said make sense, but make it christmas",
+    "customPromptInstruction": "replace it with christmas oriented stuff. make sure the sentence stays coherent and still conveys the message the original input was. but just be overly festive",
     "currentKeyIndex": 0
 }
