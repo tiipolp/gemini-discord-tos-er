@@ -8,12 +8,17 @@ import re
 import traceback
 import threading
 import asyncio
-import pystray
 import time
 import subprocess
 from PIL import Image, ImageDraw
 from datetime import datetime
 from dotenv import load_dotenv
+
+# Conditional import for pystray to support headless environments
+try:
+    import pystray
+except Exception:
+    pystray = None
 
 load_dotenv()
 
@@ -514,7 +519,7 @@ def main():
         except Exception as e:
             log.error(f"Failed to start Rich Presence: {e}")
 
-    if "--headless" in sys.argv:
+    if "--headless" in sys.argv or pystray is None:
         log.info("Running in headless mode (No Tray Icon)")
         # In headless mode, we need to keep the main thread alive.
         # Since runBot is already in a thread, we can just join it or loop.
