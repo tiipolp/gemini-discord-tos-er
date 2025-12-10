@@ -337,42 +337,40 @@ async def on_ready():
     
     # Rich Presence Setup
     try:
-        # Rich Presence Setup
         # Note: Self-bots have limitations on Rich Presence via Gateway.
         # We will try to set the most robust status possible.
         
+        # 1. Try to set a Custom Status (Text + Emoji) - This is very visible
+        # custom_activity = discord.CustomActivity(name="Undetected Volt in Bio 💰")
+        
+        # 2. Try to set the Rich Presence
+        # Note: 'buttons' are often ignored by Discord for self-bots via Gateway
+        activity = discord.Activity(
+            type=discord.ActivityType.playing,
+            application_id=1448255054602829854,
+            name="Buy now!",
+            state="Undetected with Volt", # 'state' is the second line
+            details="Buy now!", # 'details' is the first line
+            assets={
+                "large_image": "volt",
+                "large_text": "Undetected Volt in Bio"
+            },
+            timestamps={"start": int(time.time())}
+        )
+        
+        # Note: We are NOT passing 'buttons' here because it can cause the status to be rejected entirely
+        # if the library or gateway doesn't support it for this account type.
+        
+        await client.change_presence(status=discord.Status.online, activity=activity)
+        log.info("Rich Presence set via Gateway.")
+        
+    except Exception as e:
+        log.error(f"Failed to set Rich Presence: {e}")
+        # Fallback to simple game
         try:
-            # 1. Try to set a Custom Status (Text + Emoji) - This is very visible
-            # custom_activity = discord.CustomActivity(name="Undetected Volt in Bio 💰")
-            
-            # 2. Try to set the Rich Presence
-            # Note: 'buttons' are often ignored by Discord for self-bots via Gateway
-            activity = discord.Activity(
-                type=discord.ActivityType.playing,
-                application_id=1448255054602829854,
-                name="Buy now!",
-                state="Undetected with Volt", # 'state' is the second line
-                details="Buy now!", # 'details' is the first line
-                assets={
-                    "large_image": "volt",
-                    "large_text": "Undetected Volt in Bio"
-                },
-                timestamps={"start": int(time.time())}
-            )
-            
-            # Note: We are NOT passing 'buttons' here because it can cause the status to be rejected entirely
-            # if the library or gateway doesn't support it for this account type.
-            
-            await client.change_presence(status=discord.Status.online, activity=activity)
-            log.info("Rich Presence set via Gateway.")
-            
-        except Exception as e:
-            log.error(f"Failed to set Rich Presence: {e}")
-            # Fallback to simple game
-            try:
-                await client.change_presence(activity=discord.Game(name="Buy now! | Volt"))
-            except:
-                pass
+            await client.change_presence(activity=discord.Game(name="Buy now! | Volt"))
+        except:
+            pass
 
 @client.event
 async def on_message(message):
