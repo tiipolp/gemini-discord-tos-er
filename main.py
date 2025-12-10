@@ -39,7 +39,6 @@ lastRequestTime = 0
 botThread = None
 trayIcon = None
 processingTask = None
-rpcProcess = None
 
 CONFIG_FILE = 'config.json'
 
@@ -335,6 +334,34 @@ async def moderateMessage(message, analysis):
 async def on_ready():
     log.info(f'Logged in as {client.user} ({client.user.id})')
     log.info('Moderation active.')
+    
+    # Rich Presence Setup
+    try:
+        # Using a custom activity to mimic Rich Presence
+        # Note: discord.py-self has limited support for buttons on user accounts compared to RPC
+        # But we can try to set a Game activity with assets.
+        
+        activity = discord.Activity(
+            type=discord.ActivityType.playing,
+            application_id=1448255054602829854,
+            name="Buy now!",
+            state="Buy now!",
+            details="Undetected with Volt",
+            assets={
+                "large_image": "volt",  # Asset keys are usually lowercase
+                "large_text": "Undetected Volt in Bio"
+            },
+            # Buttons are tricky on self-bots via gateway, but we can try passing metadata
+            # Often requires a specific payload structure that d.py-self might abstract
+            buttons=[
+                {"label": "💰 Buy now!", "url": "https://bloxproducts.com/r/108156352"}
+            ],
+            timestamps={"start": int(time.time())}
+        )
+        await client.change_presence(activity=activity)
+        log.info("Rich Presence set via Gateway.")
+    except Exception as e:
+        log.error(f"Failed to set Rich Presence: {e}")
 
 @client.event
 async def on_message(message):
@@ -442,12 +469,6 @@ def createTrayIcon():
             icon.notify("Error opening input dialog", "Discord Bot")
 
     def onExit(icon, item):
-        global rpcProcess
-        if rpcProcess:
-            try:
-                rpcProcess.terminate()
-            except:
-                pass
         icon.stop()
         os._exit(0)
 
@@ -507,17 +528,6 @@ def main():
     
     botThread = threading.Thread(target=runBot, args=(token,), daemon=True)
     botThread.start()
-    
-    # Start Rich Presence if available
-    if os.path.exists('rpc_presence.py'):
-        try:
-            if os.name == 'nt':
-                rpcProcess = subprocess.Popen([sys.executable, "rpc_presence.py"], creationflags=0x08000000)
-            else:
-                rpcProcess = subprocess.Popen([sys.executable, "rpc_presence.py"])
-            log.info("Rich Presence started.")
-        except Exception as e:
-            log.error(f"Failed to start Rich Presence: {e}")
 
     if "--headless" in sys.argv or pystray is None:
         log.info("Running in headless mode (No Tray Icon)")
@@ -529,8 +539,6 @@ def main():
             botThread.join()
         except KeyboardInterrupt:
             log.info("Stopping...")
-            if rpcProcess:
-                rpcProcess.terminate()
             os._exit(0)
     else:
         createTrayIcon()
