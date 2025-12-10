@@ -1,9 +1,9 @@
 {
     "isModerationActive": true,
-    "enforcementLevel": "Standard",
+    "enforcementLevel": "Lenient",
     "apiTier": "Tier 1",
     "moderationMode": "Edit Only",
     "customReplacement": "I follow Discord ToS",
-    "customPromptInstruction": "replace it with christmas oriented stuff. make sure the sentence stays coherent and still conveys the message the original input was. but just be overly festive",
+    "customPromptInstruction": "replace the tos word with a word that means the same but isnt tos",
     "currentKeyIndex": 0
 }

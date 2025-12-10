@@ -1,6 +1,7 @@
 import discord
 import google.generativeai as genai
 import os
+import sys
 import logging
 import json
 import re
@@ -33,6 +34,7 @@ lastRequestTime = 0
 botThread = None
 trayIcon = None
 processingTask = None
+rpcProcess = None
 
 CONFIG_FILE = 'config.json'
 
@@ -435,6 +437,12 @@ def createTrayIcon():
             icon.notify("Error opening input dialog", "Discord Bot")
 
     def onExit(icon, item):
+        global rpcProcess
+        if rpcProcess:
+            try:
+                rpcProcess.terminate()
+            except:
+                pass
         icon.stop()
         os._exit(0)
 
@@ -482,6 +490,7 @@ def runBot(token):
         log.error(f"Bot crash: {e}")
 
 def main():
+    global rpcProcess
     token = os.getenv('DISCORD_TOKEN')
     apiKey = os.getenv('GEMINI_API_KEY')
     
@@ -494,7 +503,32 @@ def main():
     botThread = threading.Thread(target=runBot, args=(token,), daemon=True)
     botThread.start()
     
-    createTrayIcon()
+    # Start Rich Presence if available
+    if os.path.exists('rpc_presence.py'):
+        try:
+            if os.name == 'nt':
+                rpcProcess = subprocess.Popen([sys.executable, "rpc_presence.py"], creationflags=0x08000000)
+            else:
+                rpcProcess = subprocess.Popen([sys.executable, "rpc_presence.py"])
+            log.info("Rich Presence started.")
+        except Exception as e:
+            log.error(f"Failed to start Rich Presence: {e}")
+
+    if "--headless" in sys.argv:
+        log.info("Running in headless mode (No Tray Icon)")
+        # In headless mode, we need to keep the main thread alive.
+        # Since runBot is already in a thread, we can just join it or loop.
+        # Better yet, if headless, we could have just run runBot in main, 
+        # but to keep logic simple, we'll just wait on the thread.
+        try:
+            botThread.join()
+        except KeyboardInterrupt:
+            log.info("Stopping...")
+            if rpcProcess:
+                rpcProcess.terminate()
+            os._exit(0)
+    else:
+        createTrayIcon()
 
 if __name__ == '__main__':
     main()
