@@ -1,6 +1,5 @@
 discord.py-self==2.0.1
 google-generativeai==0.3.2
 python-dotenv==1.0.0
-audioop-lts==0.2.1
 pystray==0.19.5
 Pillow>=10.2.0
