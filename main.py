@@ -120,7 +120,15 @@ def configure_genai():
         log.error(f"Failed to configure API key: {e}")
 
 configure_genai()
-model = genai.GenerativeModel('gemini-2.5-flash-lite')
+
+# Configure safety settings to allow the model to analyze toxic content without blocking
+safety_settings = [
+    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+]
+model = genai.GenerativeModel('gemini-2.5-flash-lite', safety_settings=safety_settings)
 
 client = discord.Client()
 
@@ -242,7 +250,23 @@ async def checkMessageWithGemini(messageContent):
         for attempt in range(max_retries):
             try:
                 response = model.generate_content(prompt)
-                responseText = response.text.strip()
+                try:
+                    responseText = response.text.strip()
+                except ValueError:
+                    # Handle blocked responses
+                    if response.prompt_feedback and response.prompt_feedback.block_reason:
+                        log.warning(f"Gemini blocked the prompt: {response.prompt_feedback.block_reason}")
+                        # If the prompt is blocked, it's likely a severe violation
+                        return {"violates_tos": True, "severity": "full", "action": "delete", "violations": [{"phrase": "Entire Message", "reason": "Triggered AI Safety Filter (Prompt Blocked)"}]}
+                    
+                    if response.candidates and response.candidates[0].finish_reason != 1: # 1 is STOP
+                         log.warning(f"Gemini blocked the response. Finish reason: {response.candidates[0].finish_reason}")
+                         return {"violates_tos": True, "severity": "full", "action": "delete", "violations": [{"phrase": "Entire Message", "reason": "Triggered AI Safety Filter (Response Blocked)"}]}
+                    
+                    # If we get here, it's a weird empty response
+                    log.error("Gemini returned an empty response without a clear block reason.")
+                    raise ValueError("Empty response from Gemini")
+
                 break # Success
             except Exception as e:
                 log.error(f"API Error with key index {currentKeyIndex}: {e}")
@@ -253,6 +277,8 @@ async def checkMessageWithGemini(messageContent):
                     log.info("Retrying with next key...")
                     await asyncio.sleep(1)
                 else:
+                    # If it's a safety block that we caught above, we returned already.
+                    # If it's a real API error (network, etc), we raise it here.
                     raise e # All keys failed
 
         jsonMatch = jsonRegex.search(responseText)
